@@ -25,8 +25,8 @@ fi
 # This function does all the project deleting by zone.
 function delete_project()
 {
-	EC2_URL=$1
-	echo "deleting project from $EC2_URL"
+	EC2_URL="$1/services/Cloud"
+	echo "deleting project from $1"
 	# Use project admin's credentials
 	ADMIN="$PROJECT-admin"
 	EXPORTS=$(nova-manage user exports $ADMIN)
