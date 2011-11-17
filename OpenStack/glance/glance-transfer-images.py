@@ -12,7 +12,7 @@ import argparse
 GLANCE_PATH = "/var/lib/glance/images/"
 
 parser = argparse.ArgumentParser(description="Transfer images from the local Glance repository.")
-parser.add_argument('images', metavar='image', type=int, nargs='+', help="images to transfer")
+parser.add_argument('images', metavar='image', type=int, nargs='+', help="id in decimal of image to transfer")
 parser.add_argument('-d', '--dest', dest='destination', required=True, help="address of destination Glance repository")
 parser.add_argument('-p', '--port', dest='local_port', default=9292, help="local Glance port")
 
