@@ -20,7 +20,7 @@ import os.path		# for file testing.
 #APP_DIR = '/home/cybera/dev/dair/OpenStack/admin/'
 APP_DIR = '/root/dair/OpenStack/admin/'
 GSTD_QUOTA_FILE = APP_DIR + "quota-baseline.cfg" # Gold standard quotas for baseline.
-DELINQUENT_FILE = APP_DIR + "/var/lib/quota-monitor/emailed.lst" # list of delinquent projects that HAVE been emailed.
+DELINQUENT_FILE = "/var/lib/quota-monitor/emailed.lst" # list of delinquent projects that HAVE been emailed.
 #NOVA_CONF = "/home/cybera/dev/nova.conf" # nova.conf -- change for production.
 NOVA_CONF = "/etc/nova/nova.conf" # nova.conf
 AUDIT = False
@@ -49,8 +49,6 @@ class QuotaLogger:
 		
 	def error(self, msg):
 		self.logger.error(msg)
-	def warn(self, msg):
-		self.logger.warn(msg)
 
 class ZoneInstance:
 	def __init__(self):
@@ -79,10 +77,9 @@ class ZoneInstance:
 				pass
 			project_instance.set_quota(which_quota, project_count[project])
 			self.instances[project] = project_instance
-			#print project_instance
 			
 	# this method aggregates the argument zone_instance's values with this one.
-	def __sum__(self, other_zone):
+	def sum(self, other_zone):
 		"""
 		Given another zone_instance add its values to this zone's values. The
 		net result is that this object will contain the sum of resources from 
@@ -95,20 +92,12 @@ class ZoneInstance:
 				my_quota = self.instances[project]
 			except KeyError: # this project isn't using resources in other_zone.
 				my_quota = Quota(project)
-			my_quota.__add__(other_zone.get_resources(project))
+			my_quota.add(other_zone.get_resources(project))
 			self.instances[project] = my_quota
 			
 	def get_projects(self):
 		"""Returns the running instances of a given project name or an empty quota
-		object if the project doesn't exist.
-		>>> zi = ZoneInstance()
-		>>> pc = {}
-		>>> pc['a'] = 1
-		>>> pc['b'] = 2
-		>>> zi.set_instance_count_per_project(Quota.M, pc)
-		>>> print zi.get_projects()
-		['a', 'b']
-		"""
+		object if the project doesn't exist."""
 		return self.instances.keys()
 		
 	def get_resources(self, project):
@@ -148,11 +137,11 @@ class ZoneInstance:
 #		select project_id, sum(vcpus) from instances where state=1 group by project_id;
 class ZoneQueryManager:
 	def __init__(self):
-		self.Q_PROJECT_INSTANCES = """ "select project_id, count(state) from instances where state=1 group by project_id;" """
-		self.Q_PROJECT_GIGABYTES = """ "select project_id, sum(size) from volumes where attach_status=\\"attached\\" group by project_id;" """ # returns empty set not expected '0'
-		self.Q_PROJECT_VOLUMES   = """ "select project_id, count(size) from volumes where attach_status=\\"attached\\" group by project_id;" """
+		self.Q_PROJECT_INSTANCES = """ "select project_id, count(state) from instances where deleted=0 group by project_id;" """
+		self.Q_PROJECT_GIGABYTES = """ "select project_id, sum(size) from volumes where deleted=0 group by project_id;" """ # returns empty set not expected '0'. attach_status=\\"attached\\"
+		self.Q_PROJECT_VOLUMES   = """ "select project_id, count(size) from volumes where deleted=0 group by project_id;" """
 		self.Q_PROJECT_FLOAT_IPS = """ "select project_id, count(deleted) from floating_ips where deleted=0 group by project_id;" """
-		self.Q_PROJECT_CPUS      = """ "select project_id, sum(vcpus) from instances where state=1 group by project_id;" """
+		self.Q_PROJECT_CPUS      = """ "select project_id, sum(vcpus) from instances where deleted=0 group by project_id;" """
 		self.regions = {} # {'full_name' = ip}
 		self.instances = {} # {'full_name' = ZoneInstance}
 		self.password = None
@@ -353,7 +342,7 @@ class ZoneQueryManager:
 				#print "skipping " + z
 				continue
 			else:
-				other_zones_resources.__sum__(self.instances[z]) # add the project instances from the other snapshot(s)
+				other_zones_resources.sum(self.instances[z]) # add the project instances from the other snapshot(s)
 				#print "adding: resources from zone " + z
 		return other_zones_resources
 		
@@ -406,7 +395,6 @@ class ZoneQueryManager:
 
 		for contact in project_stakeholders:
 			cmd = 'echo \"' + body + '\" | mail -s \"' + subject + '\" ' + contact
-			#print "email() => " + cmd
 			self.__execute_nova__(cmd)
 		
 # metadata_items: 128
@@ -450,7 +438,7 @@ class Quota:
 		self.set_quota(Quota.C, cors)
 		
 	# This function adds the values from another quota to this one.
-	def __add__(self, quota):
+	def add(self, quota):
 		"""
 		This method adds the values of quota to this quota object. It is used
 		for calculating all the instances of resources within other zones.
@@ -460,7 +448,7 @@ class Quota:
 		>>> print p
 		'metadata_items: 1, gigabytes: 1, floating_ips: 1, instances: 1, volumes: 1, cores: 1'
 		>>> q = Quota('q')
-		>>> q.__add__(p)
+		>>> q.add(p)
 		>>> print q
 		'metadata_items: 1, gigabytes: 1, floating_ips: 1, instances: 1, volumes: 1, cores: 1'
 		"""
@@ -471,7 +459,7 @@ class Quota:
 				pass # mismatched quotas don't get added to this object that is
 					 # a quota must exist in both quota objects for it to be added
 					 
-	def __minus__(self, quota):
+	def minus(self, quota):
 		"""
 		Computes difference between minuend (this quota) and subtrahend (arg quota)
 		and returns a new quota.
@@ -487,12 +475,12 @@ class Quota:
 		'b'
 		>>> print q
 		'metadata_items: 1, gigabytes: 1, floating_ips: 1, instances: 1, volumes: 1, cores: 1'
-		>>> r = q.__minus__(p)
+		>>> r = q.minus(p)
 		>>> print q
 		'metadata_items: 1, gigabytes: 1, floating_ips: 1, instances: 1, volumes: 1, cores: 1'
 		>>> print r
 		'metadata_items: 0, gigabytes: 0, floating_ips: 0, instances: 0, volumes: 0, cores: 0'
-		>>> s = r.__minus__(p)
+		>>> s = r.minus(p)
 		>>> print s
 		'metadata_items: 0, gigabytes: 0, floating_ips: 0, instances: 0, volumes: 0, cores: 0'
 		"""
@@ -547,25 +535,6 @@ class Quota:
 			test_quota = q.split(': ')
 			if self.get_quota(test_quota[0]) != string.atoi(test_quota[1]):
 				self.set_quota(test_quota[0], string.atoi(test_quota[1]))
-			
-		
-	def compare(self, rh):
-		"""Compares two quotas and return non zero if different and zero if the same.
-		>>> q = Quota('a')
-		>>> r = Quota('b')
-		>>> print q.compare(r)
-		0
-		>>> r.set_quota(Quota.G, 10)
-		>>> print q.compare(r)
-		-10
-		>>> q.set_quota(Quota.G, 20)
-		>>> print q.compare(r)
-		10
-		"""
-		result = 0
-		for key in self.quota.keys():
-			result += self.quota[key] - rh.get_quota(key)
-		return result
 	
 	# reads lines from a file and if the values are '=' separated it will assign the named quota the '=' value.
 	# WARNING: If the quota name is spelt incorrectly the default value is used.
@@ -652,14 +621,14 @@ class Quota:
 		>>> q = p.__clone__()
 		>>> print q
 		'metadata_items: 2, gigabytes: 0, floating_ips: 0, instances: 0, volumes: 0, cores: 0'
-		>>> r = p.__minus__(q)
+		>>> r = p.minus(q)
 		>>> print r.is_over_quota()
 		False
 		>>> print r
 		'metadata_items: 0, gigabytes: 0, floating_ips: 0, instances: 0, volumes: 0, cores: 0'
 		>>> print q.is_over_quota()
 		False
-		>>> s = r.__minus__(q)
+		>>> s = r.minus(q)
 		>>> print s
 		'metadata_items: 0, gigabytes: 0, floating_ips: 0, instances: 0, volumes: 0, cores: 0'
 		>>> print s.is_over_quota()
@@ -689,14 +658,7 @@ class Quota:
 		return return_str
 		
 	def get_project_name(self):
-		"""Returns the name of the project that this quota belongs to.
-		>>> q = Quota('binky')
-		>>> print q.get_project_name()
-		binky
-		>>> q = Quota('binky a.b@c.com')
-		>>> print q.get_project_name()
-		binky
-		"""
+		"""Returns the name of the project that this quota belongs to."""
 		return self.project.split()[0]
 		
 	def get_contact(self):
@@ -764,8 +726,6 @@ def read_baseline_quota_file(file_name=GSTD_QUOTA_FILE):
 			project_quota = Quota('<none>', 128, 100, 10, 10, 10, 20)
 			name = None
 			try:
-				###
-				#print "values read from file: ", read_values
 				name = project_quota.set_values(read_values)
 			except:
 				log = QuotaLogger()
@@ -774,7 +734,6 @@ def read_baseline_quota_file(file_name=GSTD_QUOTA_FILE):
 				raise QuotaException(msg)
 			# save the project's quotas from file
 			quotas[project_quota.get_project_name()] = project_quota
-		#print quotas
 	return quotas
 	
 def read_emailed_list_file(file_name=DELINQUENT_FILE):
@@ -826,7 +785,7 @@ def write_emailed_list(emailed_dict, file_name=DELINQUENT_FILE):
 	>>> os.remove('test.tmp')
 	"""
 	try:
-		f = open(file_name, 'w')
+		f = open(file_name, 'w', 0)
 		for key in emailed_dict.keys():
 			f.write(key + " ")
 		f.close()
@@ -905,26 +864,17 @@ def balance_quotas():
 	"""
 	zoneManager = ZoneQueryManager() # this will now contain the regions and sql password
 	baseline_quotas = read_baseline_quota_file()
-	# set the quotas email flag. This is to stop over-quota projects from getting spam.
-	# deleting this file is not dangerous and will resend email to user's that are over-quota.
 	emailed_overquota_projects = read_emailed_list_file()
-	# Tell zone manager to see what's running system wide.
 	zoneManager.get_zone_resource_snapshots()
 	for zone in zoneManager.get_zones():
-		# given a specific zone, what resources are being used in other zones?
 		other_zones_resources = zoneManager.get_other_zones_current_resources(zone)
-		# new_quotas will have quotas for all projects in this zone.
 		for project in baseline_quotas.keys():
-			# if the zone doesn't have a project by that name returns a zero-ed quota.
+			# if the zone doesn't have a project by that name returns a zero-ed quota
 			resources = other_zones_resources.get_resources(project)
-			#print "in zone other resources for nisbet: " + zone + " ", other_zones_resources.get_resources(project), "\n"
-			# for each project in this zone subtract the projects total instances
-			#print "for zone: " + zone
-			new_quota = baseline_quotas[project].__minus__(other_zones_resources.get_resources(project))
+			new_quota = baseline_quotas[project].minus(other_zones_resources.get_resources(project))
 			zoneManager.set_quota(zone, baseline_quotas[project], new_quota)
-			# now if we subtract the resources we are using in our own zone do we go over quota?
 			my_resources = zoneManager.get_my_zones_resources(zone, project)
-			total_usage = new_quota.__minus__(my_resources)
+			total_usage = new_quota.minus(my_resources)
 			if total_usage.is_over_quota():
 				zoneManager.email(zone, total_usage, emailed_overquota_projects)
 				# this stops the user from getting emails every time the quota monitor runs.
