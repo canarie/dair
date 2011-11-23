@@ -7,6 +7,7 @@
 # Date:     October 3, 2011
 # Version:  0.1 - Dev. Not ready for initial release. This 
 #			version does not change metadata_items.
+#			1.01 - quota-baseline.cfg moved to /etc/nova and out of git repo.
 #################################################################
 
 import os			# for getcwd()
@@ -17,9 +18,7 @@ import subprocess	# for __execute_shell__()
 import logging		# for logging
 import os.path		# for file testing.
 
-#APP_DIR = '/home/cybera/dev/dair/OpenStack/admin/'
-APP_DIR = '/root/dair/OpenStack/admin/'
-GSTD_QUOTA_FILE = APP_DIR + "quota-baseline.cfg" # Gold standard quotas for baseline.
+GSTD_QUOTA_FILE = "/etc/nova/quota-baseline.cfg" # Gold standard quotas for baseline.
 DELINQUENT_FILE = "/var/lib/quota-monitor/emailed.lst" # list of delinquent projects that HAVE been emailed.
 #NOVA_CONF = "/home/cybera/dev/nova.conf" # nova.conf -- change for production.
 NOVA_CONF = "/etc/nova/nova.conf" # nova.conf
@@ -36,7 +35,6 @@ class ProcessExecutionError(IOError):
 
 class QuotaLogger:
 	"""Logs events of interest."""
-	### PRODUCTION CODE ###
 	LOG_FILE = "/var/log/dair/quota-monitor.log" # log file
 	#LOG_FILE = "quota-monitor.log" # log file
 	def __init__(self):
