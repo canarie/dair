@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 import sqlalchemy
+import datetime
 import json
 import web
-import re
-import atexit
 
 """
 REST service that provides information about cloud resources, machine types,
@@ -11,35 +10,51 @@ and project quotas.  Should be run on each management node in the cloud.
 """
 
 NOVA_CONF = '/etc/nova/nova.conf'
-
-url_prefix = '/nova-info'
+URL_PREFIX = '/nova-info'
 
 urls = (
-	'%s/resources' % url_prefix, 'CloudResources',
-	'%s/machinetypes' % url_prefix, 'MachineTypes',
-	'%s/quotas/(.*)' % url_prefix, 'Quotas'
+	'%s/resources' % URL_PREFIX, 'Resources',
+	'%s/machinetypes' % URL_PREFIX, 'MachineTypes',
+	'%s/quotas/(.*)' % URL_PREFIX, 'Quotas'
 )
 
 web.config.debug = False
 app = web.application(urls, globals())
 
+max_cores = None
 with open(NOVA_CONF, 'r') as f:
 	for line in f:
 		if line.startswith('--sql_connection'):
 			db_url = line.strip().split('=', 1)[1]
+		elif line.startswith('--max_cores'):
+			max_cores = int(line.strip().split('=', 1)[1])
 
-conn = sqlalchemy.create_engine(db_url).connect()
+engine = sqlalchemy.create_engine(db_url)
 
-@atexit.register
-def cleanup():
-	conn.close()
+class CachedContent():
+	EXPIRY_TIME = datetime.timedelta(seconds=10)
 
-class CloudResources:
-	def GET(self):
-		node_usage = conn.execute(
+	def __init__(self):
+		self.last_updated = datetime.datetime.today() - self.EXPIRY_TIME
+
+	def update(self, *args):
+		"""Implement to update self.content"""
+		raise NotImplementedError
+
+	def GET(self, *args):
+		time_since_update = datetime.datetime.today() - self.last_updated
+		if time_since_update > self.EXPIRY_TIME:
+			self.update(*args)
+			self.last_updated = datetime.datetime.today()
+
+		web.header('Content-Type', 'application/json; charset=utf-8')
+		return json.dumps(self.content)
+
+class Resources(CachedContent):
+	def update(self):
+		node_usage = engine.execute(
 			"SELECT host, "
 			"vcpus,vcpus_used, "
-			"vcpus-vcpus_used AS vcpus_avail, "
 			"memory_mb,memory_mb_used, "
 			"memory_mb-memory_mb_used AS memory_mb_avail "
 			"FROM compute_nodes "
@@ -47,59 +62,58 @@ class CloudResources:
 			"WHERE s.binary='nova-compute' AND s.deleted=0 AND s.disabled=0"
 		)
 	
-		total_usage = conn.execute(
-			"SELECT CAST(SUM(vcpus) AS SIGNED) AS vcpus, "
-			"CAST(SUM(vcpus_used) AS SIGNED) AS vcpus_used, "
-			"CAST(SUM(vcpus)-SUM(vcpus_used) AS SIGNED) AS vcpus_avail, "
-			"CAST(SUM(memory_mb) AS SIGNED) AS memory_mb, "
-			"CAST(SUM(memory_mb_used) AS SIGNED) AS memory_mb_used, "
-			"CAST(SUM(memory_mb)-SUM(memory_mb_used) AS SIGNED) AS memory_mb_avail "
-			"FROM compute_nodes "
-			"INNER JOIN services AS s ON service_id=s.id "
-			"WHERE s.binary='nova-compute' AND s.deleted=0 AND s.disabled=0"
-		)
-
-		resources = {}
-	
+		resources = {}	
+		resources['nodes'] = {}
 		for row in node_usage:
-			resources[row['host']] = dict(row.items())
-			del resources[row['host']]['host']
-	
-		resources['total'] = dict(total_usage.first().items())
-	
+			host = row['host']
+			resources['nodes'][host] = dict(row.items())
+			resources['nodes'][host]['vcpus'] = max_cores or row['vcpus']
+			resources['nodes'][host]['vcpus_avail'] = resources['nodes'][host]['vcpus'] - resources['nodes'][host]['vcpus_used']
+			del resources['nodes'][host]['host']
+		
+		resources['total'] = {}
+		for node in resources['nodes'].itervalues():
+			for (key, value) in node.items():
+				try:
+					resources['total'][key] += value
+				except KeyError:
+					resources['total'][key] = value
+
 		node_usage.close()
-		total_usage.close()
+		self.content = resources
 
-		web.header('Content-Type', 'application/json; charset=utf-8')
-		return json.dumps(resources)
-
-class MachineTypes:
-	def GET(self):
-		result = conn.execute(
+class MachineTypes(CachedContent):
+	def update(self):
+		result = engine.execute(
 			"SELECT name,vcpus,memory_mb,local_gb,swap "
 			"FROM instance_types "
 			"WHERE deleted=0"
 		)
 
 		machine_types = {}
-
 		for row in result:
 			machine_types[row['name']] = dict(row.items())
 			del machine_types[row['name']]['name']
 
 		result.close()
+		self.content = machine_types
 
-		web.header('Content-Type', 'application/json; charset=utf-8')
-		return json.dumps(machine_types)
-
-class Quotas:
+class Quotas():
 	def GET(self, project):
+		conn = engine.connect()
+
 		total = conn.execute(
 			"SELECT instances,cores,volumes,gigabytes,floating_ips "
 			"FROM quotas "
 			"WHERE project_id=%(project)s AND deleted=0",
 			project=project
 		)
+
+		quotas = {}
+		try:
+			quotas['total'] = dict(total.first())
+		except TypeError:
+			return "Unknown project"
 
 		used_compute = conn.execute(
 			"SELECT COUNT(1) as instances, "
@@ -124,15 +138,9 @@ class Quotas:
 			project=project
 		)
 
-		quotas = {}
-
-		try:
-			quotas['total'] = dict(total.first())
-		except TypeError:
-			return "Unknown project"
-
 		quotas['used'] = dict(used_compute.first().items() + used_volume.first().items() + used_ip.first().items())
 		
+		conn.close()
 		web.header('Content-Type', 'application/json; charset=utf-8')
 		return json.dumps(quotas)
 
