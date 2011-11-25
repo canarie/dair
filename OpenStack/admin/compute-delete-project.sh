@@ -6,8 +6,7 @@
 
 
 NOVA_CONF='/etc/nova/nova.conf'
-QUOTA_CFG="/root/dair/OpenStack/admin/quota-baseline.cfg"
-GIT_DIR="/root/dair"
+QUOTA_CFG="/etc/nova/quota-baseline.cfg"
 
 
 if [[ $EUID -ne 0 ]]; then
@@ -136,13 +135,7 @@ if [ -s "$QUOTA_CFG" ]
 then
   echo "deleting $PROJECT from $QUOTA_CFG."
   # delete the line with project name in it from the cfg and save.
-  MY_DIR=`pwd`
-  cd $GIT_DIR
-  git pull
   (echo "g/${PROJECT}/d"; echo 'wq') | ex -s $QUOTA_CFG
-  git commit --message "Removed project $PROJECT." $QUOTA_CFG
-  git push
-  cd $MY_DIR
 else
   echo "$QUOTA_CFG not found. Manually delete or comment out this project's quotas."
 fi
