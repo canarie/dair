@@ -22,41 +22,54 @@ web.config.debug = False
 app = web.application(urls, globals())
 
 max_cores = None
+max_gigabytes = None
 with open(NOVA_CONF, 'r') as f:
 	for line in f:
 		if line.startswith('--sql_connection'):
 			db_url = line.strip().split('=', 1)[1]
 		elif line.startswith('--max_cores'):
 			max_cores = int(line.strip().split('=', 1)[1])
+		elif line.startswith('--max_gigabytes'):
+			max_gigabytes = int(line.strip().split('=', 1)[1])
 
-engine = sqlalchemy.create_engine(db_url)
+engine = sqlalchemy.create_engine(db_url, pool_recycle=7200)
 
 class CachedContent():
 	EXPIRY_TIME = datetime.timedelta(seconds=10)
 
 	def __init__(self):
-		self.last_updated = datetime.datetime.today() - self.EXPIRY_TIME
+		self.last_refreshed = datetime.datetime.today() - self.EXPIRY_TIME
 
-	def update(self, *args):
-		"""Implement to update self.content"""
+	def on_expire(self, *args):
+		"""Implement to refresh self.content after expiry"""
 		raise NotImplementedError
 
-	def GET(self, *args):
-		time_since_update = datetime.datetime.today() - self.last_updated
-		if time_since_update > self.EXPIRY_TIME:
-			self.update(*args)
-			self.last_updated = datetime.datetime.today()
+	def on_get(self, *args):
+		"""Override to perform any actions needed per GET"""
+		pass
 
+	def format(self, *args):
+		"""Override to modify output formatting"""
 		web.header('Content-Type', 'application/json; charset=utf-8')
 		return json.dumps(self.content)
 
+	def GET(self, *args):
+		time_since_refresh = datetime.datetime.today() - self.last_refreshed
+		if time_since_refresh > self.EXPIRY_TIME:
+			self.on_expire(*args)
+			self.last_refreshed = datetime.datetime.today()
+
+		self.on_get(*args)
+		return self.format(*args)
+
 class Resources(CachedContent):
-	def update(self):
+	def on_expire(self):
 		node_usage = engine.execute(
 			"SELECT host, "
 			"vcpus,vcpus_used, "
 			"memory_mb,memory_mb_used, "
-			"memory_mb-memory_mb_used AS memory_mb_avail "
+			"memory_mb-memory_mb_used AS memory_mb_avail, "
+			"local_gb,local_gb_used "
 			"FROM compute_nodes "
 			"INNER JOIN services AS s ON service_id=s.id "
 			"WHERE s.binary='nova-compute' AND s.deleted=0 AND s.disabled=0"
@@ -65,11 +78,12 @@ class Resources(CachedContent):
 		resources = {}	
 		resources['nodes'] = {}
 		for row in node_usage:
-			host = row['host']
-			resources['nodes'][host] = dict(row.items())
-			resources['nodes'][host]['vcpus'] = max_cores or row['vcpus']
-			resources['nodes'][host]['vcpus_avail'] = resources['nodes'][host]['vcpus'] - resources['nodes'][host]['vcpus_used']
-			del resources['nodes'][host]['host']
+			node = resources['nodes'][row['host']] = dict(row.items())
+			node['vcpus'] = max_cores or row['vcpus']
+			node['vcpus_avail'] = node['vcpus'] - node['vcpus_used']
+			node['local_gb'] = max_gigabytes or row['local_gb']
+			node['local_gb_avail'] = node['local_gb'] - node['local_gb_used']
+			del node['host']
 		
 		resources['total'] = {}
 		for node in resources['nodes'].itervalues():
@@ -83,7 +97,9 @@ class Resources(CachedContent):
 		self.content = resources
 
 class MachineTypes(CachedContent):
-	def update(self):
+	EXPIRY_TIME = datetime.timedelta(seconds=60)
+
+	def on_expire(self):
 		result = engine.execute(
 			"SELECT name,vcpus,memory_mb,local_gb,swap "
 			"FROM instance_types "
@@ -98,8 +114,18 @@ class MachineTypes(CachedContent):
 		result.close()
 		self.content = machine_types
 
-class Quotas():
-	def GET(self, project):
+class Quotas(CachedContent):
+	EXPIRY_TIME = datetime.timedelta(seconds=60)
+
+	def on_expire(self, *args):
+		self.content = {}
+
+	def on_get(self, *args):
+		project = args[0]
+
+		if self.content.has_key(project):
+			return
+
 		conn = engine.connect()
 
 		total = conn.execute(
@@ -113,7 +139,8 @@ class Quotas():
 		try:
 			quotas['total'] = dict(total.first())
 		except TypeError:
-			return "Unknown project"
+			conn.close()
+			raise web.notfound()
 
 		used_compute = conn.execute(
 			"SELECT COUNT(1) as instances, "
@@ -141,8 +168,12 @@ class Quotas():
 		quotas['used'] = dict(used_compute.first().items() + used_volume.first().items() + used_ip.first().items())
 		
 		conn.close()
+		self.content[project] = quotas
+
+	def format(self, *args):
+		project = args[0]
 		web.header('Content-Type', 'application/json; charset=utf-8')
-		return json.dumps(quotas)
+		return json.dumps(self.content[project])
 
 if __name__ == '__main__':
 	app.run()
