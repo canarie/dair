@@ -79,7 +79,7 @@ class Resources(CachedContent):
 		resources['nodes'] = {}
 		for row in node_usage:
 			node = resources['nodes'][row['host']] = dict(row.items())
-			node['vcpus'] = max_cores or row['vcpus']
+			node['vcpus'] = max_cores * row['vcpus']
 			node['vcpus_avail'] = node['vcpus'] - node['vcpus_used']
 			node['local_gb'] = max_gigabytes or row['local_gb']
 			node['local_gb_avail'] = node['local_gb'] - node['local_gb_used']
