@@ -1,6 +1,8 @@
 *.log
 *.out
 *.rc
+*.pyc
+*.swp
 OpenStack/ldap/ldap-env
 OpenStack/ldap/modify.ldif
 OpenStack/nova/nova-CC-env
