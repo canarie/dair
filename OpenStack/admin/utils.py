@@ -4,6 +4,32 @@ import os
 import time
 import subprocess
 
+def get_regions(region_rc_filename=None):
+    if not region_rc_filename:
+        region_rc_files = ('albertarc', 'quebecrc')
+    else:
+        region_rc_files = (region_rc_filename, )
+
+    regions = []
+
+    for region_rc_file in region_rc_files:
+        region_rc_file_path = os.path.expanduser('~/creds-admin/%(region_rc_file)s' % locals())
+
+        if os.path.exists(region_rc_file_path):
+            access_key = execute("grep EC2_ACCESS_KEY= " + region_rc_file_path)[0].split('=')[1].strip('"\n')
+            secret_access_key = execute("grep EC2_SECRET_KEY= " + region_rc_file_path)[0].split('=')[1].strip('"\n')
+            url = execute("grep EC2_URL= " + region_rc_file_path)[0].split('=')[1].strip('"\n')
+            
+            regions.append(Region(access_key, secret_access_key, url))
+
+    return regions
+
+class Region:
+    def __init__(self, access_key, secret_access_key, url):
+        self.access_key = access_key
+        self.secret_access_key = secret_access_key
+        self.url = url
+
 def execute(cmd, process_input=None, addl_env=None, check_exit_code=True, attempts=1):
     while attempts > 0:
         attempts -= 1
@@ -37,3 +63,4 @@ class ProcessExecutionError(IOError):
             exit_code = '-'
         message = "%(description)s\nCommand: %(cmd)s\nExit code: %(exit_code)s\nStdout: %(stdout)r\nStderr: %(stderr)r" % locals()
         IOError.__init__(self, message)
+

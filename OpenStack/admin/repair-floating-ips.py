@@ -3,7 +3,7 @@
 TODO: COMMENT
 """
 import os
-import os.path
+import sys	
 import time
 import logging
 from urlparse import urlparse
@@ -13,19 +13,11 @@ import boto.ec2
 
 import utils
 
-EC2_ACCESS_KEY = os.getenv("EC2_ACCESS_KEY")
-EC2_SECRET_KEY = os.getenv("EC2_SECRET_KEY")
-EC2_URL = os.getenv("EC2_URL")
-
 LIST = "iptables -t nat --line-numbers -n -L"
 DEL = "iptables -t nat -D"
 PREROUTING = "nova-network-PREROUTING"
 OUTPUT = "nova-network-OUTPUT"
 SNAT = "nova-network-floating-snat"
-
-if not (EC2_ACCESS_KEY and EC2_SECRET_KEY and EC2_URL):
-    print "No cloud credentials found.  Recommend you source your rc file."
-    exit(1)
 
 logger = logging.getLogger('repair-floating-ips')
 logger.setLevel(logging.DEBUG)
@@ -39,10 +31,12 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
-ec2_url_parsed = urlparse(EC2_URL)
+region = utils.get_regions(sys.argv[1])[0]
+
+ec2_url_parsed = urlparse(region.url)
 novaRegion=boto.ec2.regioninfo.RegionInfo(name = "nova", endpoint = ec2_url_parsed.hostname)
-conn = boto.connect_ec2(aws_access_key_id=EC2_ACCESS_KEY,
-                        aws_secret_access_key=EC2_SECRET_KEY,
+conn = boto.connect_ec2(aws_access_key_id=region.access_key,
+                        aws_secret_access_key=region.secret_access_key,
                         is_secure=True,
                         region=novaRegion,
                         port=ec2_url_parsed.port,
