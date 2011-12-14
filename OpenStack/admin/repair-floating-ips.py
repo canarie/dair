@@ -13,8 +13,8 @@ import boto.ec2
 
 import utils
 
-LIST = "iptables -t nat --line-numbers -n -L"
-DEL = "iptables -t nat -D"
+LIST = "iptables -n -t nat --line-numbers -L"
+DEL = "iptables -n -t nat -D"
 PREROUTING = "nova-network-PREROUTING"
 OUTPUT = "nova-network-OUTPUT"
 SNAT = "nova-network-floating-snat"
@@ -31,16 +31,17 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
-region = utils.get_regions(sys.argv[1])[0]
+region_rc_filename = sys.argv[1]
+region = utils.get_regions(region_rc_filename)[0]
 
-ec2_url_parsed = urlparse(region.url)
-novaRegion=boto.ec2.regioninfo.RegionInfo(name = "nova", endpoint = ec2_url_parsed.hostname)
+url_parsed = urlparse(region.url)
+novaRegion=boto.ec2.regioninfo.RegionInfo(name = "nova", endpoint = url_parsed.hostname)
 conn = boto.connect_ec2(aws_access_key_id=region.access_key,
                         aws_secret_access_key=region.secret_access_key,
                         is_secure=True,
                         region=novaRegion,
-                        port=ec2_url_parsed.port,
-                        path=ec2_url_parsed.path)
+                        port=url_parsed.port,
+                        path=url_parsed.path)
 
 reservations = conn.get_all_instances()
 instance_floating_ips = set()
@@ -50,7 +51,7 @@ for reservation in reservations:
         if not instance.public_dns_name in instance_floating_ips:
             instance_floating_ips.add(instance.public_dns_name)
         else:
-            message = 'Instance Floating IP assigned to more than one instance!'
+            message = 'Instance Floating IP %(instance.public_dns_name)s assigned to more than one instance!' % locals()
             logger.error(message)
             raise Exception(message)
 
@@ -60,7 +61,7 @@ prerouting_lines = prerouting_lines.splitlines()[2:] # skip the first two non-da
 prerouting_floating_ips = set()
 corrupt_floating_ips = set()
 ignore_floating_ips = set()
-ignore_floating_ips.add(ec2_url_parsed.hostname)
+ignore_floating_ips.add(url_parsed.hostname)
 ignore_floating_ips.add('169.254.169.254')
 
 for prerouting_line in prerouting_lines:
@@ -78,6 +79,23 @@ corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.differ
 if not corrupt_floating_ips:
     logger.info("No Floating IPs to repair")
 else:
+    logger.info("Corrupt Floating IP(s) %(corrupt_floating_ips)s" % locals())    
+
+    import smtplib
+    from email.mime.text import MIMEText
+
+    body = "Corrupt Floating IP(s) %(corrupt_floating_ips)s in %(region_rc_filename)s" % locals()
+    to = ['']
+    msg = MIMEText(body)
+    msg['Subject'] = 'Corrupt Floating IP report'
+    msg['From'] = ''
+    msg['To'] = ', '.join(to)
+
+    s = smtplib.SMTP('')
+    s.sendmail(msg['From'], to, msg.as_string())
+    s.quit()
+
+"""
     for floating_ip in corrupt_floating_ips:
         prerouting_lines = utils.execute("%(LIST)s %(PREROUTING)s | grep %(floating_ip)s" % locals())[0]
         prerouting_lines = prerouting_lines.splitlines()
@@ -95,3 +113,4 @@ else:
         utils.execute("%(DEL)s %(SNAT)s %(line_number)s" % locals()) 
 
         logger.info("Repaired Floating IP %(floating_ip)s" % locals())
+"""
