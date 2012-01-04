@@ -7,6 +7,7 @@ import sys
 import time
 import logging
 from urlparse import urlparse
+from pprint import pprint
 
 import boto
 import boto.ec2
@@ -43,6 +44,13 @@ conn = boto.connect_ec2(aws_access_key_id=region.access_key,
                         port=url_parsed.port,
                         path=url_parsed.path)
 
+addresses = conn.get_all_addresses()
+used_floating_ips = set()
+
+for address in addresses:
+    if not address.instance_id.startswith('None'):
+        used_floating_ips.add(address.public_ip)
+
 reservations = conn.get_all_instances()
 instance_floating_ips = set()
 
@@ -51,7 +59,7 @@ for reservation in reservations:
         if not instance.public_dns_name in instance_floating_ips:
             instance_floating_ips.add(instance.public_dns_name)
         else:
-            message = 'Instance Floating IP %(instance.public_dns_name)s assigned to more than one instance!' % locals()
+            message = 'Instance Floating IP %s assigned to more than one instance!' % instance.public_dns_name
             logger.error(message)
             raise Exception(message)
 
@@ -74,17 +82,62 @@ for prerouting_line in prerouting_lines:
     else:
         prerouting_floating_ips.add(dnat_floating_ip)
 
-corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.difference(instance_floating_ips))
 
-if not corrupt_floating_ips:
+corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.difference(instance_floating_ips))
+orphan_floating_ips = used_floating_ips.difference(instance_floating_ips)
+
+print(orphan_floating_ips)
+
+if not (corrupt_floating_ips or orphan_floating_ips):
     logger.info("No Floating IPs to repair")
 else:
-    logger.info("Corrupt Floating IP(s) %(corrupt_floating_ips)s" % locals())    
+    commands = []
+    body = ""
+
+    if orphan_floating_ips:
+        logger.info("Orphan Floating IP(s) %(orphan_floating_ips)s" % locals())
+        body += "Orphan Floating IP(s) %(orphan_floating_ips)s in %(region_rc_filename)s\n" % locals() 
+
+        for floating_ip in orphan_floating_ips:
+            commands.append("euca-disassociate-address %(floating_ip)s" % locals())
+            #conn.disassociate_address(floating_ip)
+
+        body += "The following commands would have been run:\n\t"
+        body += "\n\t".join(commands)
+
+    commands = []
+
+    if corrupt_floating_ips:
+        logger.info("Corrupt Floating IP(s) %(corrupt_floating_ips)s" % locals())    
+        body += "Corrupt Floating IP(s) %(corrupt_floating_ips)s in %(region_rc_filename)s\n" % locals()
+
+        for floating_ip in corrupt_floating_ips:
+            prerouting_lines = utils.execute("%(LIST)s %(PREROUTING)s | grep %(floating_ip)s" % locals())[0]
+            prerouting_lines = prerouting_lines.splitlines()
+            line_number = prerouting_lines[0].split()[0]
+            commands.append("%(DEL)s %(PREROUTING)s %(line_number)s" % locals())
+            #utils.execute("%(DEL)s %(PREROUTING)s %(line_number)s" % locals())
+
+            output_lines = utils.execute("%(LIST)s %(OUTPUT)s | grep %(floating_ip)s" % locals())[0] 
+            output_lines = output_lines.splitlines()
+            line_number = output_lines[0].split()[0] 
+            commands.append("%(DEL)s %(OUTPUT)s %(line_number)s" % locals()) 
+            #utils.execute("%(DEL)s %(OUTPUT)s %(line_number)s" % locals())
+
+            snat_lines = utils.execute("%(LIST)s %(SNAT)s | grep %(floating_ip)s" % locals())[0]
+            snat_lines = snat_lines.splitlines()
+            line_number = snat_lines[0].split()[0] 
+            commands.append("%(DEL)s %(SNAT)s %(line_number)s" % locals())
+            #utils.execute("%(DEL)s %(SNAT)s %(line_number)s" % locals()) 
+
+        body += "The following commands would have been run:\n\t"
+        body += "\n\t".join(commands)
+
+    logger.info("Repaired Floating IP(s) %s" % orphan_floating_ips.union(corrupt_floating_ips))
 
     import smtplib
     from email.mime.text import MIMEText
 
-    body = "Corrupt Floating IP(s) %(corrupt_floating_ips)s in %(region_rc_filename)s" % locals()
     to = ['']
     msg = MIMEText(body)
     msg['Subject'] = 'Corrupt Floating IP report'
@@ -95,22 +148,3 @@ else:
     s.sendmail(msg['From'], to, msg.as_string())
     s.quit()
 
-"""
-    for floating_ip in corrupt_floating_ips:
-        prerouting_lines = utils.execute("%(LIST)s %(PREROUTING)s | grep %(floating_ip)s" % locals())[0]
-        prerouting_lines = prerouting_lines.splitlines()
-        line_number = prerouting_lines[0].split()[0]
-        utils.execute("%(DEL)s %(PREROUTING)s %(line_number)s" % locals())
-
-        output_lines = utils.execute("%(LIST)s %(OUTPUT)s | grep %(floating_ip)s" % locals())[0] 
-        output_lines = output_lines.splitlines()
-        line_number = output_lines[0].split()[0] 
-        utils.execute("%(DEL)s %(OUTPUT)s %(line_number)s" % locals())
-
-        snat_lines = utils.execute("%(LIST)s %(SNAT)s | grep %(floating_ip)s" % locals())[0]
-        snat_lines = snat_lines.splitlines()
-        line_number = snat_lines[0].split()[0] 
-        utils.execute("%(DEL)s %(SNAT)s %(line_number)s" % locals()) 
-
-        logger.info("Repaired Floating IP %(floating_ip)s" % locals())
-"""
