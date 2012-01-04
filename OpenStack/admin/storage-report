@@ -195,19 +195,27 @@ class Zone:
     def _populate_zone(self, zone_var, zone):
         """ Iterates over a zones accounts and collects user information """
         for account in zone.get_accounts():
-            users = self.execute_call('swauth-list -p ' + zone_var + ' ' + account).split()
-            for user in users:
-                u_name = '' # user colon seperated name.
-                # {"groups": [{"name": "1143TransitHub:Ian"}, {"name": "1143TransitHub"}, {"name": ".admin"}], "auth": "plaintext:xxxxxxxxxxx"}
-                acc_info = json.loads(self.execute_call('swauth-list ' + zone_var + ' ' + account + ' ' + user))
-                for x in acc_info['groups']: # this holds the list with username, we use this with the -U switch in stat.
-                    if x['name'].find(':') > -1: # found a colon that separates the last name from first name
-                        u_name = x['name']
-                u_key = acc_info['auth'].split(':')[1] # splits the key off the 'plaintext' string.
-                # now get the information from st
-                #print self.execute_call('st -A ' + zone.get_authority_URL() + ' -U ' + u_name + ' -K ' + u_key + ' stat')
-                zone.set_user(account, u_name, self.execute_call('st -A ' + zone.get_authority_URL() + ' -U ' + u_name + ' -K ' + u_key + ' stat'))
-            #break # uncoment this limit the number of accounts of each zone to 1 to speed up testing.
+            # jt
+            # Looks like swift because corrupt during the last round of network issues
+            # There are accounts in swift that are "half-open" -- swift thinks they are
+            # created, but will not add/remove users from them.
+            # This causes an error when querying for users
+            #users = self.execute_call('swauth-list -p ' + zone_var + ' ' + account).split()
+            msg = self.execute_call('swauth-list -p ' + zone_var + ' ' + account)
+            if msg.strip() != 'List failed: 404 Not Found':
+                users = msg.split()
+                for user in users:
+                    u_name = '' # user colon seperated name.
+                    # {"groups": [{"name": "1143TransitHub:Ian"}, {"name": "1143TransitHub"}, {"name": ".admin"}], "auth": "plaintext:xxxxxxxxxxx"}
+                    acc_info = json.loads(self.execute_call('swauth-list ' + zone_var + ' ' + account + ' ' + user))
+                    for x in acc_info['groups']: # this holds the list with username, we use this with the -U switch in stat.
+                        if x['name'].find(':') > -1: # found a colon that separates the last name from first name
+                            u_name = x['name']
+                    u_key = acc_info['auth'].split(':')[1] # splits the key off the 'plaintext' string.
+                    # now get the information from st
+                    #print self.execute_call('st -A ' + zone.get_authority_URL() + ' -U ' + u_name + ' -K ' + u_key + ' stat')
+                    zone.set_user(account, u_name, self.execute_call('st -A ' + zone.get_authority_URL() + ' -U ' + u_name + ' -K ' + u_key + ' stat'))
+                #break # uncoment this limit the number of accounts of each zone to 1 to speed up testing.
 
     def _get_authority_URL(self, var_value):
         """ Returns the authority URL from the environment variable value parameter """
