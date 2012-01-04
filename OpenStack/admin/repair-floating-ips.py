@@ -86,8 +86,6 @@ for prerouting_line in prerouting_lines:
 corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.difference(instance_floating_ips))
 orphan_floating_ips = used_floating_ips.difference(instance_floating_ips)
 
-print(orphan_floating_ips)
-
 if not (corrupt_floating_ips or orphan_floating_ips):
     logger.info("No Floating IPs to repair")
 else:
