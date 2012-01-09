@@ -8,5 +8,5 @@ OpenStack/ldap/modify.ldif
 OpenStack/nova/nova-CC-env
 OpenStack/nova/nova-NODE-env
 OpenStack/dashboard/dashboard-env
-
+OpenStack/admin/repair_floating_ips_email.py
 

@@ -85,12 +85,13 @@ for prerouting_line in prerouting_lines:
 
 corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.difference(instance_floating_ips))
 orphan_floating_ips = used_floating_ips.difference(instance_floating_ips)
+body = ""
 
 if not (corrupt_floating_ips or orphan_floating_ips):
     logger.info("No Floating IPs to repair")
+    body += "No Floating IPs to repair"
 else:
     commands = []
-    body = ""
 
     if orphan_floating_ips:
         logger.info("Orphan Floating IP(s) %(orphan_floating_ips)s" % locals())
@@ -133,16 +134,17 @@ else:
 
     logger.info("Repaired Floating IP(s) %s" % orphan_floating_ips.union(corrupt_floating_ips))
 
-    import smtplib
-    from email.mime.text import MIMEText
+import smtplib
+from email.mime.text import MIMEText
+import repair_floating_ips_email 
 
-    to = ['']
-    msg = MIMEText(body)
-    msg['Subject'] = 'Corrupt Floating IP report'
-    msg['From'] = ''
-    msg['To'] = ', '.join(to)
+to = repair_floating_ips_email.to
+msg = MIMEText(body)
+msg['Subject'] = repair_floating_ips_email.subject
+msg['From'] = repair_floating_ips_email.from_field
+msg['To'] = ', '.join(to)
 
-    s = smtplib.SMTP('')
-    s.sendmail(msg['From'], to, msg.as_string())
-    s.quit()
+s = smtplib.SMTP(repair_floating_ips_email.smtp)
+s.sendmail(msg['From'], to, msg.as_string())
+s.quit()
 
