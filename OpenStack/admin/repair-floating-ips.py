@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-TODO: COMMENT
+This script detects Floating IPs that have been "corrupted" or "orphaned" and repairs them.
 """
 import os
 import sys	
@@ -14,8 +14,8 @@ import boto.ec2
 
 import utils
 
-LIST = "iptables -n -t nat --line-numbers -L"
-DEL = "iptables -n -t nat -D"
+LIST = "/sbin/iptables -n -t nat --line-numbers -L"
+DEL = "/sbin/iptables -n -t nat -D"
 PREROUTING = "nova-network-PREROUTING"
 OUTPUT = "nova-network-OUTPUT"
 SNAT = "nova-network-floating-snat"
