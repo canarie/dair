@@ -53,11 +53,15 @@ for address in addresses:
 
 reservations = conn.get_all_instances()
 instance_floating_ips = set()
+floating_ip_to_instance = {}
 
 for reservation in reservations:
     for instance in reservation.instances:
-        if not instance.public_dns_name in instance_floating_ips:
+        if instance.public_dns_name.startswith('10'):
+            continue
+        elif not instance.public_dns_name in instance_floating_ips:
             instance_floating_ips.add(instance.public_dns_name)
+            floating_ip_to_instance[instance.public_dns_name] = instance.id
         else:
             message = 'Instance Floating IP %s assigned to more than one instance!' % instance.public_dns_name
             logger.error(message)
@@ -82,22 +86,23 @@ for prerouting_line in prerouting_lines:
     else:
         prerouting_floating_ips.add(dnat_floating_ip)
 
-
-corrupt_floating_ips = corrupt_floating_ips.union(prerouting_floating_ips.difference(instance_floating_ips))
-orphan_floating_ips = used_floating_ips.difference(instance_floating_ips)
+missing_from_instances_floating_ips = used_floating_ips.difference(instance_floating_ips)
+missing_from_addresses_floating_ips = instance_floating_ips.difference(used_floating_ips)
 body = ""
 
-if not (corrupt_floating_ips or orphan_floating_ips):
+if not (corrupt_floating_ips or missing_from_instances_floating_ips or missing_from_addresses_floating_ips):
     logger.info("No Floating IPs to repair")
     body += "No Floating IPs to repair"
 else:
     commands = []
 
-    if orphan_floating_ips:
-        logger.info("Orphan Floating IP(s) %(orphan_floating_ips)s" % locals())
-        body += "Orphan Floating IP(s) %(orphan_floating_ips)s in %(region_rc_filename)s\n" % locals() 
+    if missing_from_instances_floating_ips:
+        message = "Floating IP(s) that appear to be associated but are not actually associated " \
+                  "with any instances: %(missing_from_instances_floating_ips)s" % locals()
+        logger.info(message)
+        body += "%(message)s\n" % locals()
 
-        for floating_ip in orphan_floating_ips:
+        for floating_ip in missing_from_instances_floating_ips:
             commands.append("euca-disassociate-address %(floating_ip)s" % locals())
             #conn.disassociate_address(floating_ip)
 
@@ -106,9 +111,26 @@ else:
 
     commands = []
 
+    if missing_from_addresses_floating_ips:
+        message = "Floating IP(s) that do not appear to be associated but are actually associated " \
+                  "with an instance: %(missing_from_addresses_floating_ips)s" % locals()
+        logger.info(message)
+        body += "\n%(message)s\n" % locals()
+
+        for floating_ip in missing_from_addresses_floating_ips:
+            instance_id = floating_ip_to_instance[floating_ip]
+            commands.append("euca-associate-address -i %(instance_id)s %(floating_ip)s" % locals())
+            #conn.disassociate_address(floating_ip)
+
+        body += "The following commands would have been run:\n\t"
+        body += "\n\t".join(commands)
+
+    commands = []
+
     if corrupt_floating_ips:
-        logger.info("Corrupt Floating IP(s) %(corrupt_floating_ips)s" % locals())    
-        body += "Corrupt Floating IP(s) %(corrupt_floating_ips)s in %(region_rc_filename)s\n" % locals()
+        message = "Floating IP(s) with extraneous rules in iptables %(corrupt_floating_ips)s" % locals()
+        logger.info(message)    
+        body += "\n%(message)s\n" % locals()
 
         for floating_ip in corrupt_floating_ips:
             prerouting_lines = utils.execute("%(LIST)s %(PREROUTING)s | grep %(floating_ip)s" % locals())[0]
@@ -132,7 +154,7 @@ else:
         body += "The following commands would have been run:\n\t"
         body += "\n\t".join(commands)
 
-    logger.info("Repaired Floating IP(s) %s" % orphan_floating_ips.union(corrupt_floating_ips))
+#    logger.info("Repaired Floating IP(s) %s" % missing_from_instances_floating_ips.union(corrupt_floating_ips))
 
 import smtplib
 from email.mime.text import MIMEText
