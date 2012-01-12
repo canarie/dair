@@ -15,10 +15,11 @@ import boto.ec2
 import utils
 
 LIST = "/sbin/iptables -n -t nat --line-numbers -L"
-DEL = "/sbin/iptables -n -t nat -D"
+DEL = "/sbin/iptables -t nat -D"
 PREROUTING = "nova-network-PREROUTING"
 OUTPUT = "nova-network-OUTPUT"
 SNAT = "nova-network-floating-snat"
+CHAINS = [PREROUTING, OUTPUT, SNAT]
 
 logger = logging.getLogger('repair-floating-ips')
 logger.setLevel(logging.DEBUG)
@@ -53,7 +54,7 @@ for address in addresses:
 
 reservations = conn.get_all_instances()
 instance_floating_ips = set()
-floating_ip_to_instance = {}
+instance_info = {}
 
 for reservation in reservations:
     for instance in reservation.instances:
@@ -61,7 +62,7 @@ for reservation in reservations:
             continue
         elif not instance.public_dns_name in instance_floating_ips:
             instance_floating_ips.add(instance.public_dns_name)
-            floating_ip_to_instance[instance.public_dns_name] = instance.id
+            instance_info[instance.public_dns_name] = (instance.id, instance.private_dns_name)
         else:
             message = 'Instance Floating IP %s assigned to more than one instance!' % instance.public_dns_name
             logger.error(message)
@@ -81,7 +82,9 @@ for prerouting_line in prerouting_lines:
 
     if dnat_floating_ip in ignore_floating_ips:
         continue
-    elif dnat_floating_ip in prerouting_floating_ips:
+    elif (dnat_floating_ip in prerouting_floating_ips or
+          not dnat_floating_ip in instance_floating_ips or
+          not dnat_floating_ip in used_floating_ips):
         corrupt_floating_ips.add(dnat_floating_ip)
     else:
         prerouting_floating_ips.add(dnat_floating_ip)
@@ -118,7 +121,7 @@ else:
         body += "\n%(message)s\n" % locals()
 
         for floating_ip in missing_from_addresses_floating_ips:
-            instance_id = floating_ip_to_instance[floating_ip]
+            instance_id = instance_info[floating_ip][0]
             commands.append("euca-associate-address -i %(instance_id)s %(floating_ip)s" % locals())
             #conn.disassociate_address(floating_ip)
 
@@ -133,23 +136,18 @@ else:
         body += "\n%(message)s\n" % locals()
 
         for floating_ip in corrupt_floating_ips:
-            prerouting_lines = utils.execute("%(LIST)s %(PREROUTING)s | grep %(floating_ip)s" % locals())[0]
-            prerouting_lines = prerouting_lines.splitlines()
-            line_number = prerouting_lines[0].split()[0]
-            commands.append("%(DEL)s %(PREROUTING)s %(line_number)s" % locals())
-            #utils.execute("%(DEL)s %(PREROUTING)s %(line_number)s" % locals())
+            # there may not be an instance associated with the floating ip so provide a dummy default
+            private_ip = instance_info.pop(floating_ip, ("i-xxxxxxxx", "x.x.x.x"))[1]
 
-            output_lines = utils.execute("%(LIST)s %(OUTPUT)s | grep %(floating_ip)s" % locals())[0] 
-            output_lines = output_lines.splitlines()
-            line_number = output_lines[0].split()[0] 
-            commands.append("%(DEL)s %(OUTPUT)s %(line_number)s" % locals()) 
-            #utils.execute("%(DEL)s %(OUTPUT)s %(line_number)s" % locals())
-
-            snat_lines = utils.execute("%(LIST)s %(SNAT)s | grep %(floating_ip)s" % locals())[0]
-            snat_lines = snat_lines.splitlines()
-            line_number = snat_lines[0].split()[0] 
-            commands.append("%(DEL)s %(SNAT)s %(line_number)s" % locals())
-            #utils.execute("%(DEL)s %(SNAT)s %(line_number)s" % locals()) 
+            for chain in CHAINS:
+                lines = utils.execute("%(LIST)s %(chain)s | grep %(floating_ip)s" % locals())[0]
+                lines = lines.splitlines()
+                
+                for line in lines:
+                    if line.find(private_ip) == -1:
+                        line_number = line.split()[0]
+                        commands.append("%(DEL)s %(chain)s %(line_number)s" % locals())
+                        #utils.execute("%(DEL)s %(chain)s %(line_number)s" % locals())
 
         body += "The following commands would have been run:\n\t"
         body += "\n\t".join(commands)
