@@ -83,8 +83,8 @@ for prerouting_line in prerouting_lines:
     if dnat_floating_ip in ignore_floating_ips:
         continue
     elif (dnat_floating_ip in prerouting_floating_ips or
-          not dnat_floating_ip in instance_floating_ips or
-          not dnat_floating_ip in used_floating_ips):
+          (not dnat_floating_ip in instance_floating_ips and
+           not dnat_floating_ip in used_floating_ips)):
         corrupt_floating_ips.add(dnat_floating_ip)
     else:
         prerouting_floating_ips.add(dnat_floating_ip)
